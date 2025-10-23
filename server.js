@@ -64,18 +64,25 @@ app.all('/test', (req, res) => {
  * Main voice endpoint - Connect to ElevenLabs
  */
 app.all('/voice', (req, res) => {
-  console.log('\n📞 VOICE ENDPOINT CALLED');
-  console.log('From:', req.body.From || 'Unknown');
-  console.log('To:', req.body.To || 'Unknown');
-  console.log('CallSid:', req.body.CallSid || 'Unknown');
-  
-  // Log the call
-  callLogs.push({
-    timestamp: new Date().toISOString(),
-    from: req.body.From,
-    to: req.body.To,
-    callSid: req.body.CallSid,
-    endpoint: '/voice'
+    console.log('\n📞 VOICE ENDPOINT CALLED');
+    console.log('From:', req.body.From || 'Unknown');
+    console.log('To:', req.body.To || 'Unknown');
+    console.log('CallSid:', req.body.CallSid || 'Unknown');
+    
+    // SADECE PARAMETER TAG'LERİ KULLANALIM
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+  <Response>
+      <Say language="tr-TR">Merhaba, sizi asistana bağlıyorum.</Say>
+      <Connect>
+          <Stream url="wss://api.elevenlabs.io/v1/convai/conversation">
+              <Parameter name="agent_id" value="${AGENT_ID}" />
+              <Parameter name="xi_api_key" value="${ELEVENLABS_API_KEY}" />
+          </Stream>
+      </Connect>
+  </Response>`;
+    
+    res.set('Content-Type', 'text/xml; charset=utf-8');
+    res.send(twiml);
   });
   
   // TwiML response with ElevenLabs WebSocket
