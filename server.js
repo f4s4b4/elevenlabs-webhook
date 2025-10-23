@@ -85,19 +85,6 @@ app.all('/voice', (req, res) => {
     res.send(twiml);
   });
   
-  // TwiML response with ElevenLabs WebSocket
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say language="tr-TR">Merhaba, sizi satış temsilcimize bağlıyorum.</Say>
-    <Connect>
-        <Stream url="wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${AGENT_ID}&amp;xi_api_key=${ELEVENLABS_API_KEY}" />
-    </Connect>
-</Response>`;
-  
-  res.set('Content-Type', 'text/xml; charset=utf-8');
-  res.send(twiml);
-});
-
 /**
  * Alternative voice endpoint - Using Parameter tags
  */
