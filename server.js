@@ -1,172 +1,211 @@
 /**
- * Twilio to ElevenLabs AI Agent Integration
- * Main Server File
+ * Twilio to ElevenLabs Bridge - WebSocket Enabled
+ * Fixes HTTP->WS upgrade issue
  */
 
 require('dotenv').config();
 const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
 const app = express();
 
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Constants from environment variables
+// Constants
 const PORT = process.env.PORT || 3000;
 const AGENT_ID = process.env.AGENT_ID || 'agent_8201k870ff6ze1psrzbddpx32zyd';
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 
-// Call logs storage
-const callLogs = [];
-
 // ============================================
-// ROUTES
+// HTTP ENDPOINTS
 // ============================================
 
-/**
- * Home route - System status
- */
 app.get('/', (req, res) => {
   res.json({
-    status: '✅ Webhook Server Running',
+    status: '✅ WebSocket Bridge Running',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'production',
+    agent_id: AGENT_ID,
     endpoints: {
-      '/': 'System status',
-      '/voice': 'Main voice endpoint for ElevenLabs',
-      '/voice-alt': 'Alternative voice endpoint',
-      '/test': 'Test endpoint',
-      '/logs': 'Call logs'
-    },
-    agent_id: AGENT_ID
+      '/': 'Status',
+      '/voice': 'Twilio webhook (returns TwiML)',
+      '/twilio-ws': 'WebSocket endpoint for Media Streams'
+    }
   });
 });
 
 /**
- * Test endpoint - Simple TwiML response
+ * Twilio Voice Webhook - Returns TwiML immediately
+ * Critical: Must return quickly or Twilio drops the call
  */
-app.all('/test', (req, res) => {
-  console.log('📞 Test endpoint called');
+app.post('/voice', (req, res) => {
+  console.log('📞 Incoming call from:', req.body.From);
   
+  // Get the host dynamically
+  const host = process.env.RENDER_EXTERNAL_HOSTNAME || req.headers.host;
+  
+  // Return TwiML with WebSocket stream URL
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say language="tr-TR">Test başarılı. Webhook çalışıyor.</Say>
-    <Pause length="1"/>
-    <Say language="en-US">Test successful. Webhook is working.</Say>
-    <Hangup/>
+    <Say language="tr-TR">Bağlanıyor.</Say>
+    <Connect>
+        <Stream url="wss://${host}/twilio-ws" />
+    </Connect>
 </Response>`;
   
   res.set('Content-Type', 'text/xml');
   res.send(twiml);
 });
 
-/**
- * Main voice endpoint - Connect to ElevenLabs
- */
-app.all('/voice', (req, res) => {
-    console.log('\n📞 VOICE ENDPOINT CALLED');
-    console.log('From:', req.body.From || 'Unknown');
-    console.log('To:', req.body.To || 'Unknown');
-    console.log('CallSid:', req.body.CallSid || 'Unknown');
-    
-    // SADECE PARAMETER TAG'LERİ KULLANALIM
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-  <Response>
-      <Say language="tr-TR">Merhaba, sizi asistana bağlıyorum.</Say>
-      <Connect>
-          <Stream url="wss://api.elevenlabs.io/v1/convai/conversation">
-              <Parameter name="agent_id" value="${AGENT_ID}" />
-              <Parameter name="xi_api_key" value="${ELEVENLABS_API_KEY}" />
-          </Stream>
-      </Connect>
-  </Response>`;
-    
-    res.set('Content-Type', 'text/xml; charset=utf-8');
-    res.send(twiml);
-  });
-  
-/**
- * Alternative voice endpoint - Using Parameter tags
- */
-app.all('/voice-alt', (req, res) => {
-  console.log('\n📞 ALTERNATIVE VOICE ENDPOINT CALLED');
-  
-  // Log the call
-  callLogs.push({
-    timestamp: new Date().toISOString(),
-    from: req.body.From,
-    to: req.body.To,
-    callSid: req.body.CallSid,
-    endpoint: '/voice-alt'
-  });
-  
+// Simple test endpoint
+app.all('/test', (req, res) => {
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say language="en-US">Connecting to AI assistant.</Say>
-    <Connect>
-        <Stream url="wss://api.elevenlabs.io/v1/convai/conversation">
-            <Parameter name="agent_id" value="${AGENT_ID}" />
-            <Parameter name="xi_api_key" value="${ELEVENLABS_API_KEY}" />
-        </Stream>
-    </Connect>
+    <Say>Test successful.</Say>
+    <Hangup/>
 </Response>`;
-  
-  res.set('Content-Type', 'text/xml; charset=utf-8');
+  res.set('Content-Type', 'text/xml');
   res.send(twiml);
 });
 
-/**
- * Call logs endpoint
- */
-app.get('/logs', (req, res) => {
-  res.json({
-    total_calls: callLogs.length,
-    last_10_calls: callLogs.slice(-10)
-  });
-});
+// ============================================
+// HTTP SERVER WITH WEBSOCKET SUPPORT
+// ============================================
 
-/**
- * ElevenLabs webhook endpoint (if needed)
- */
-app.post('/webhook', (req, res) => {
-  console.log('\n📥 ELEVENLABS WEBHOOK REQUEST');
-  console.log('Body:', JSON.stringify(req.body, null, 2));
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ noServer: true });
+
+// Handle HTTP->WebSocket upgrade
+server.on('upgrade', (request, socket, head) => {
+  console.log('⬆️ WebSocket upgrade request for:', request.url);
   
-  // Return ElevenLabs expected format
-  res.json({
-    conversation_initiation_client_data: {
-      agent_id: AGENT_ID,
-      customer: {
-        name: req.body.customer_name || 'Customer',
-        phone: req.body.phone || '+1234567890',
-        email: req.body.email || 'customer@example.com'
-      },
-      context: {
-        source: 'twilio_integration',
-        timestamp: new Date().toISOString()
+  if (request.url === '/twilio-ws') {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+// ============================================
+// WEBSOCKET BRIDGE LOGIC
+// ============================================
+
+wss.on('connection', async (twilioWS) => {
+  console.log('🔌 Twilio WebSocket connected');
+  
+  let elevenWS = null;
+  let streamSid = null;
+  
+  try {
+    // Connect to ElevenLabs WebSocket
+    const elevenURL = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${AGENT_ID}`;
+    
+    elevenWS = new WebSocket(elevenURL, {
+      headers: {
+        'xi-api-key': ELEVENLABS_API_KEY
       }
+    });
+    
+    elevenWS.on('open', () => {
+      console.log('✅ Connected to ElevenLabs');
+    });
+    
+    elevenWS.on('error', (err) => {
+      console.error('❌ ElevenLabs error:', err.message);
+    });
+    
+    elevenWS.on('close', () => {
+      console.log('🔌 ElevenLabs disconnected');
+      twilioWS.close();
+    });
+    
+    // Handle messages from Twilio
+    twilioWS.on('message', (data) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        
+        switch(msg.event) {
+          case 'start':
+            console.log('▶️ Stream started:', msg.start);
+            streamSid = msg.start.streamSid;
+            // Send initial config to ElevenLabs if needed
+            break;
+            
+          case 'media':
+            // Forward audio to ElevenLabs
+            if (elevenWS.readyState === WebSocket.OPEN && msg.media) {
+              elevenWS.send(JSON.stringify({
+                type: 'audio',
+                audio: msg.media.payload
+              }));
+            }
+            break;
+            
+          case 'stop':
+            console.log('⏹️ Stream stopped');
+            if (elevenWS) elevenWS.close();
+            break;
+        }
+      } catch (e) {
+        console.error('Parse error:', e);
+      }
+    });
+    
+    // Handle messages from ElevenLabs
+    elevenWS.on('message', (data) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        
+        // Forward audio back to Twilio
+        if (msg.type === 'audio' && msg.audio) {
+          twilioWS.send(JSON.stringify({
+            event: 'media',
+            streamSid: streamSid,
+            media: {
+              payload: msg.audio
+            }
+          }));
+        }
+      } catch (e) {
+        console.error('ElevenLabs parse error:', e);
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Bridge error:', error);
+  }
+  
+  // Heartbeat to prevent timeout
+  const heartbeat = setInterval(() => {
+    if (twilioWS.readyState === WebSocket.OPEN) {
+      twilioWS.ping();
     }
+    if (elevenWS && elevenWS.readyState === WebSocket.OPEN) {
+      elevenWS.ping();
+    }
+  }, 20000);
+  
+  // Cleanup
+  twilioWS.on('close', () => {
+    console.log('🔌 Twilio disconnected');
+    clearInterval(heartbeat);
+    if (elevenWS) elevenWS.close();
   });
 });
 
 // ============================================
-// SERVER START
+// START SERVER
 // ============================================
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log('============================================');
-  console.log('🚀 ELEVENLABS WEBHOOK SERVER STARTED');
+  console.log('🚀 WEBSOCKET BRIDGE SERVER STARTED');
   console.log('============================================');
   console.log(`📍 Port: ${PORT}`);
   console.log(`🤖 Agent ID: ${AGENT_ID}`);
-  console.log(`🔑 API Key: ${ELEVENLABS_API_KEY ? 'Configured' : 'Missing!'}`);
-  console.log('');
-  console.log('📋 Available endpoints:');
-  console.log(`   /test - Test endpoint`);
-  console.log(`   /voice - Main voice endpoint`);
-  console.log(`   /voice-alt - Alternative voice endpoint`);
-  console.log(`   /logs - Call logs`);
+  console.log(`🔑 API Key: ${ELEVENLABS_API_KEY ? 'Set' : 'Missing!'}`);
   console.log('============================================');
 });
-
-module.exports = app;
